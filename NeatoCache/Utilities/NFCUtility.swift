@@ -32,6 +32,11 @@
 
 import Foundation
 
+import CoreNFC
+
+typealias NFCReadingCompletion = (Result<NFCNDEFMessage?, Error>) -> Void
+typealias LocationReadingCompletion = (Result<Location, Error>) -> Void
+
 enum NFCError: LocalizedError {
   case unavailable
   case invalidated(message: String)
@@ -50,6 +55,35 @@ enum NFCError: LocalizedError {
 }
 
 class NFCUtility: NSObject {
+  private var session: NFCTagReaderSession?
+  private var completion: LocationReadingCompletion?
+  
+  static func performAction(
+    completion: LocationReadingCompletion? = nil
+  ) {
+    debugPrint("Perform action")
+    
+    // 3
+    guard NFCTagReaderSession.readingAvailable else {
+      completion?(.failure(NFCError.unavailable))
+      print("NFC is not available on this device")
+      return
+    }
+
+    // shared.action = action
+    shared.completion = completion
+    
+    // 4
+    shared.session = NFCTagReaderSession(
+      pollingOption: .iso15693,
+      delegate: shared.self,
+      queue: nil)
+    // 5
+    // shared.session?.alertMessage = action.alertMessage
+    // 6
+    shared.session?.begin()
+  }
+
   enum NFCAction {
     case readLocation
     case setupLocation(locationName: String)
@@ -65,8 +99,134 @@ class NFCUtility: NSObject {
         return "Place tag near iPhone to add \(visitorName)"
       }
     }
+    
+    
   }
 
   private static let shared = NFCUtility()
-  private var action: NFCAction = .readLocation
+  // private var action: NFCAction = .readLocation
+}
+
+// MARK: - NFC Tag Reader Session Delegate
+extension NFCUtility: NFCTagReaderSessionDelegate {
+  func tagReaderSessionDidBecomeActive(_ session: NFCTagReaderSession) {
+    // Not used
+  }
+  
+  
+  func tagReaderSession(
+    _ session: NFCTagReaderSession,
+    didDetect tags: [NFCTag]
+  ) {
+    print("tagReaderSession")
+    
+    let vTags = tags.filter() { t in
+      switch (t) {
+      case .iso15693(_):
+        return true;
+      default:
+        return false;
+      }
+    }
+    
+    guard
+      let tag = vTags.first,
+      vTags.count == 1
+      else {
+        session.alertMessage = """
+          There are too many tags present. Remove all and then try again.
+          """
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(500)) {
+          session.restartPolling()
+        }
+        return
+    }
+    
+    print("One tag")
+    dump(tag)
+    
+    // 1
+    session.connect(to: tag) { error in
+      print("Connected!")
+      
+      if let error = error {
+        print("Handling connection error")
+        self.handleError(error)
+        return
+      }
+      
+      guard case let .iso15693(v) = tag else {
+        print("Not iso15693 tag!, ignore!")
+        return;
+      }
+      
+      let mfgCode = String(format: "%02X", v.icManufacturerCode)
+      let uid = format(data: v.identifier)
+      let serial = format(data: v.icSerialNumber)
+      dump(uid)
+      dump(serial)
+      
+      
+      session.alertMessage = "\(mfgCode) \(uid) \(serial)"
+      
+      if #available(iOS 14, *) {
+        let flags: NFCISO15693RequestFlag = [.highDataRate, .protocolExtension, .option]
+        
+        // v.readNDEF() {
+        //   print($0, $1)
+        // }
+        
+        let params: Data = Data([])
+        print(String(describing: flags))
+        print(String(describing: params))
+        
+        // Not allowed for reserved command codes
+        // v.customCommand(requestFlags: flags, customCommandCode: 0x20, customRequestParameters: params) {
+        //   print($0)
+        // }
+        
+        // Fails
+        v.readSingleBlock(requestFlags: flags, blockNumber: 20) {
+          print($0)
+        }
+        
+        // Fails
+        // v.readMultipleBlocks(requestFlags: flags, blockRange: NSRange(0...4)) {
+        //   print($0)
+        // }
+      }
+
+      
+      session.invalidate()
+     
+    }
+
+  }
+  
+  private func handleError(_ error: Error) {
+    debugPrint(error.localizedDescription)
+    session?.alertMessage = error.localizedDescription
+    session?.invalidate()
+  }
+  
+  func tagReaderSession(
+    _ session: NFCTagReaderSession,
+    didInvalidateWithError error: Error
+  ) {
+    print("didInvalidateWithError")
+    if let error = error as? NFCReaderError,
+        error.code != .readerSessionInvalidationErrorUserCanceled {
+      completion?(.failure(NFCError.invalidated(message:
+        error.localizedDescription)))
+    }
+
+    self.session = nil
+    completion = nil
+  }
+}
+
+fileprivate func format(data: Data) -> String {
+  return data.reduce("") { acc, item in
+    return acc + String(format: "%02X", item)
+  }
 }

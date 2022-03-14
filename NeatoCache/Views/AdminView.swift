@@ -47,6 +47,11 @@ struct AdminView: View {
             .autocapitalization(.words)
           // swiftlint:disable multiple_closures_with_trailing_closure multiline_arguments
           Button(action: {
+            
+            debugPrint("Touch!")
+            NFCUtility.performAction() { _ in
+              debugPrint("Completion!")
+            }
           }) {
             Text("Save Location…")
           }

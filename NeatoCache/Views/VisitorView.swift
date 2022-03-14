@@ -54,6 +54,11 @@ struct VisitorView: View {
   private var scanSection: some View {
     Section {
       Button(action: {
+        
+        debugPrint("Touch!")
+        NFCUtility.performAction() { _ in
+          debugPrint("Completion!")
+        }
       }) {
         Text("Scan Location Tag…")
       }
